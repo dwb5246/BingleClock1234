@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# PyInstaller 构建产物（本地产物不入库）
+build/
+dist/
+*.spec.bak
+
+# 本地备份副本
+pomodoro_app - 副本/
+
+# 虚拟环境
+.venv/
+venv/
+
+# 编辑器和系统文件
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
