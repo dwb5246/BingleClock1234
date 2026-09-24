@@ -16,8 +16,8 @@
 | 项   | 内容                                                                  |
 | --- | ------------------------------------------------------------------- |
 | 产品  | Bingle 时钟 —— Windows 桌面极简番茄钟（目录版 exe）                               |
-| 技术栈 | Python 3.14 + PySide6 6.11 + PyInstaller 6.22（--onedir --windowed，单文件版配置见 `Bingle时钟_onefile.spec.bak`） |
-| 产物  | `dist/Bingle时钟/Bingle时钟.exe`（目录版约 87 MB，启动约 1 秒，离线运行，免装 Python）                              |
+| 技术栈 | Python 3.14 + PySide6 6.11 + PyInstaller 6.22（--onedir --windowed） |
+| 产物  | `dist/Bingle时钟/Bingle时钟.exe`（目录版当前约 143 MB，启动约 1 秒，离线运行，免装 Python；分发 zip 约 38 MB）                              |
 | 数据  | `%APPDATA%\PomodoroTimer\config.json`（utf-8-sig 兼容）                 |
 | 音频  | 5 款 Mixkit 免费商用提示音，内嵌于 exe（assets\audio）                            |
 
@@ -63,7 +63,7 @@ pomodoro/
 
 ├── icons.py             内联 SVG → QIcon（黑白线条图标统一出口）
 
-├── widgets.py           TimerRing 自绘圆环进度控件
+├── widgets.py           TimerRing 自绘圆环进度 + FramelessDialog 无边框弹窗基类
 
 ├── main\_window.py       主窗口（无边框圆角、页签、环、操作区、顶栏）
 
@@ -71,7 +71,11 @@ pomodoro/
 
 ├── popup.py             时间到弹窗（右下角、循环音、点任意键关闭）
 
-└── settings\_dialog.py   设置面板（铃声 / 音量 / 开机自启）
+├── settings\_dialog.py   设置面板（铃声 / 音量 / 开机自启）
+
+├── stats.py             专注统计存取（FocusStats，config 内 stats 字段）
+
+└── stats\_dialog.py      专注统计窗口（今日/本周/累计 + 7 天柱状图）
 ```
 
 ### 2.2 计时状态机（state.py）
@@ -110,9 +114,11 @@ pomodoro/
 
 | 窗口             | 要点                                                                                                                     |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| MainWindow 主窗  | 无边框（FramelessWindowHint + 圆角 18px + 淡边框 #E1E3E7）、默认 760×760 正方形、min 480×480、WA\_TranslucentBackground、空白处拖动、右下角缩放、全屏切换；顶栏：左[设置]，右[缩小][置顶][全屏][最小化][关闭] |
+| MainWindow 主窗  | 无边框（FramelessWindowHint + 圆角 18px + 淡边框 #E1E3E7）、默认 760×760 正方形、min 480×480、空白处拖动、右下角缩放、全屏切换；顶栏：左[设置][统计]，右[缩小][置顶][全屏][最小化][关闭] |
 | MiniWindow 小窗  | 240×190（可缩放 180×140\~420×320）、置顶、模式名严格居中、时间大号（side×0.24）+ 环进度 + 淡色开始按钮（专注淡蓝 / 休息淡绿）+ 重置 / 开始 / 跳过（32px），右上角放大按钮与双击均可展开回主窗 |
 | PopupWindow 弹窗 | 340×168（内容自适应）、右下角定位（距边缘 24px）、循环提示音（≥10s）、**点任意按钮即停声关窗**；专注结束=开始休息/稍后，休息结束=再休息一会/继续专注/稍后；按钮圆角 6px 等大；**防覆盖**：弹窗期间若用户已在主界面操作，按钮只停声关窗不改状态 |
+| SettingsDialog 设置 | 无边框白底（FramelessDialog 基类）、320×292、顶部标题"设置"+右上角×、可拖动、首次打开居中；提示音选择/试听、音量、开机自启，改动即时生效 |
+| StatsDialog 统计 | 无边框白底（FramelessDialog 基类）、340×285、顶部标题"统计"+右上角×、可拖动、首次打开居中；今日/本周/累计三卡片 + 近 7 天柱状图（自绘）；**打开期间每 5 秒自动刷新**；只统计专注自然走完（跳过/重置不计） |
 
 主窗布局用 **2:3:2 弹性比例**（左右各 20%、中间 60%）控制环的大小：
 
@@ -124,11 +130,15 @@ pomodoro/
 
 
 
-* 配置项：专注时长 / 休息时长 / 专注提示音 / 休息提示音 / 音量 / 置顶 / 开机自启。
+* 配置项：专注时长 / 休息时长 / 专注提示音 / 休息提示音 / 音量 / 置顶 / 开机自启 / 专注统计。
 
 * 写入 `%APPDATA%\PomodoroTimer\config.json`，删除即恢复默认
 
   （专注 25 / 休息 5 / 音量 80 / 不置顶）。
+
+* 专注统计存于同一文件的 `stats` 字段：`{"YYYY-MM-DD": 分钟数}`，按天累计；
+
+  只记录**自然走完的专注**（finished 且模式为专注），跳过 / 重置 / 暂停不计。
 
 * 开机自启通过 Windows 注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 写入。
 
@@ -208,6 +218,18 @@ pomodoro/
 
    验证窗口需用 `ctypes.EnumWindows` 全枚举按标题匹配。
 
+9. **弹窗透明背景在部分 Windows 上渲染不可靠**：`FramelessWindowHint + WA_TranslucentBackground`
+
+   曾导致带父窗口的弹窗直接不显示、设置弹窗错位显示不全。修复：弹窗统一改为
+
+   `FramelessDialog` 基类（无边框 + **不透明**白底矩形 + 淡边框 #E1E3E7 + 顶部标题行/关闭按钮），
+
+   `Qt.Tool` 标志避免占任务栏，`showEvent` 首次打开居中（父窗口中心或屏幕中心），按住拖动。
+
+10. **弹窗标题要短**：无边框后无系统标题栏，任务栏标签来自 `setWindowTitle`；统计弹窗
+
+    曾因标题「专注统计 - Bingle时钟」过长被用户诟病，已统一为短名「统计」。
+
 
 
 ***
@@ -220,7 +242,7 @@ pomodoro/
 | --- | -------- | ----------------------------------------------------------------- |
 | 高   | 单实例锁     | 当前可开多个实例，建议用命名互斥体保证单实例，托盘化更好                                      |
 | 高   | 系统托盘     | 关闭按钮改为最小化到托盘，减少误退；提供托盘右键菜单                                        |
-| 中   | exe 体积瘦身 | 已通过 `Bingle时钟.spec` 白名单过滤降至约 37 MB（剔除 WebEngine/opengl32sw/无用插件）；如需再减可尝试 UPX 二次压缩 |
+| 中   | exe 体积瘦身 | 当前目录版 143 MB（PySide6 库占 65 MB）；可再剔除用不到的 Qt 模块/翻译/插件压到约 90 MB，极端可试 UPX 二次压缩（注意杀软误报） |
 | 中   | 高分屏适配    | 建议补充 `Qt.AA_EnableHighDpiScaling` 与 Per-Monitor DPI 测试（当前主窗为逻辑像素） |
 | 中   | 主题扩展     | 当前专注黑白 / 休息绿色点缀；可预留主题配置便于后续换色                                     |
 | 低   | 铃声替换     | 提示音集中在 `assets/audio`，可扩展用户自选铃声目录                                 |
@@ -250,42 +272,47 @@ pomodoro\_app\dist\Bingle时钟\Bingle时钟.exe（目录版，约 87 MB）
 >
 > 的时间戳与真机启动为准。
 >
-> **体积与启动对比**：PySide6 官方 hook 会把 Qt 全家桶（含 194MB 的 WebEngine、FFmpeg、软件 OpenGL）一并打包，
-> 未瘦身时约 55 MB。`Bingle时钟.spec` 通过白名单过滤只保留
-> QtCore/Gui/Widgets/Multimedia/Network/Svg 六个库与必要插件、翻译，
+> **体积与启动**：PySide6 官方 hook 会把 Qt 全家桶（含 194MB 的 WebEngine、FFmpeg、软件 OpenGL）一并打包。
+> `Bingle时钟.spec` 通过白名单过滤只保留 QtCore/Gui/Widgets/Multimedia/Network/Svg 六个库与必要插件、翻译，
 > 剔除 opengl32sw 与无用图片格式插件。
-> 两种交付形式（`Bingle时钟_onefile.spec.bak` 保留单文件配置，可一键重建）：
-> - **目录版 onedir（当前正式版）**：约 87 MB，免解压，实测启动约 **1 秒**（冷 2.6s / 热 0.9s）；
-> - 单文件版 onefile：约 37 MB，每次启动自解压 + 杀毒扫描，实测 **5-7 秒**。
-> 注意：**FFmpeg（av\*.dll）不可删**——QMediaPlayer 播放 mp3 依赖它解码；
-> QtNetwork/QtMultimediaWidgets 的 DLL 必须保留——PySide6 hook 会连带收集对应 pyd，删了启动即崩。
+> - **目录版 onedir（当前正式版）**：exe 本体约 2 MB，加 `_internal`（Python 运行时 + Qt 库）整个目录约 143 MB，
+>   免解压，实测启动约 **1 秒**（冷 2.6s / 热 0.9s）；分发时压缩为 zip 约 **38 MB**（GitHub Releases 附件）。
+> - 体积构成大头：`_internal/PySide6`（Qt 库约 65 MB）、`_internal` 其余（Python 运行时 + 加密库约 20 MB）。
+> - 注意：**FFmpeg（av\*.dll）不可删**——QMediaPlayer 播放 mp3 依赖它解码；
+>   QtNetwork/QtMultimediaWidgets 的 DLL 必须保留——PySide6 hook 会连带收集对应 pyd，删了启动即崩。
 
-### 目录结构（瘦身后）
+### 目录结构（当前）
 
 
 
 ```
-new-chat/
+E:\Code\comate-zulu-demo\Bingle时钟\        # 项目根（已迁入，git 仓库）
 
 ├── pomodoro\_app/                  # 工程（源码 + 打包产物）
 
 │   ├── main.py                    # 入口
 
-│   ├── pomodoro/                  # 源码模块（10 个文件）
+│   ├── pomodoro/                  # 源码模块（13 个文件，见 2.1）
 
 │   ├── assets/audio/              # 内嵌提示音
 
 │   ├── dist/Bingle时钟/           # 交付物（目录版：exe + _internal）
 
-│   ├── Bingle时钟.spec            # PyInstaller 配置（当前 onedir）
+│   ├── dist/Bingle时钟-v1.0.zip   # 分发 zip（Releases 附件，约 38 MB）
 
-│   └── Bingle时钟_onefile.spec.bak # 单文件版配置备份
+│   ├── Bingle时钟.spec            # PyInstaller 配置（onedir）
 
-├── pomodoro\_assets/               # 提示音原始文件（备份）
+│   └── app.ico / app_icon_source.png  # 应用图标
 
-├── pomodoro\_app - 副本/           # 用户备份（勿动）
+├── .gitignore                     # dist/build/备份不入库
+
+├── README.md                      # GitHub 主页
 
 ├── Bingle时钟使用说明.md           # 用户操作手册
 
-└── Bingle时钟设计说明.md           # 本文档
+├── Bingle时钟设计说明.md           # 本文档
+
+├── Bingle时钟项目复盘.md           # 迭代记录
+
+└── Bingle时钟-用户输入原文.md      # 需求原文存档
 ```

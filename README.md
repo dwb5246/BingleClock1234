@@ -20,7 +20,7 @@
 ## 技术栈
 
 - Python 3.14 + PySide6
-- 打包：PyInstaller（onedir 模式，约 88MB）
+- 打包：PyInstaller（onedir 模式，目录约 140MB；zip 分发约 38MB）
 - 配置存储：`%APPDATA%\PomodoroTimer\config.json`（含统计）
 
 ## 目录结构
